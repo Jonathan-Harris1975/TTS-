@@ -1,0 +1,38 @@
+import express from "express";
+const router = express.Router();
+
+/**
+ * POST /compose
+ * Expect: { intro: "<speak>…</speak>", main: "<speak>…</speak>", outro: "<speak>…</speak>" }
+ * Return: SSML and TTS-ready object
+ */
+router.post("/", (req, res) => {
+  try {
+    const { intro, main, outro } = req.body;
+    if (!intro || !main || !outro) {
+      return res.status(400).json({ error: "intro, main, and outro are required" });
+    }
+
+    const mergedSSML = `${intro} ${main} ${outro}`.trim();
+
+    const ttsObject = {
+      input: { ssml: mergedSSML },
+      voice: {
+        languageCode: "en-GB",
+        name: "en-GB-Wavenet-B",
+        ssmlGender: "MALE"
+      },
+      audioConfig: { audioEncoding: "MP3" }
+    };
+
+    res.json({
+      ssml: mergedSSML,
+      "TTS output complete": ttsObject,
+      "TTS output complete (string)": JSON.stringify(ttsObject)
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+export default router;
