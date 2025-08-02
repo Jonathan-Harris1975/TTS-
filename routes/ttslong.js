@@ -45,7 +45,7 @@ router.post("/start", async (req, res) => {
       location,
     } = req.body || {};
 
-    if (!input || !audioConfig or !outputGcsUri) {
+    if (!input || !audioConfig || !outputGcsUri) {
       return res.status(400).json({ error: "input, audioConfig, and outputGcsUri are required" });
     }
 
@@ -78,7 +78,7 @@ router.post("/start", async (req, res) => {
 
 /**
  * Poll an operation by its name returned from /start
- * GET /tts/long/status?name=operations/123
+ * GET /tts/long/status?name=projects/123/locations/us-central1/operations/456
  */
 router.get("/status", async (req, res) => {
   try {
