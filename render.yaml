@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: podcast-tts-long-audio
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeploy: true
+    plan: free
+    envVars:
+      - key: GCP_PROJECT_ID
+        sync: false
+      - key: GCP_LOCATION
+        value: us-central1
+      - key: PASS_THROUGH_AUTH
+        value: "false"
+      - key: GOOGLE_CREDENTIALS
+        sync: false

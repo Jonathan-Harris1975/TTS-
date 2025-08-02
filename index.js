@@ -1,18 +1,23 @@
 import express from "express";
 import dotenv from "dotenv";
-import composeRouter from "./routes/compose.js";
-import ttsLongRouter from "./routes/ttsLong.js";
+import cors from "cors";
+import longTtsRouter from "./routes/ttslong.js";
 
 dotenv.config();
-const app = express();
-app.use(express.json({ limit: "10mb" }));
 
-app.get("/", (req, res) => {
-  res.json({ status: "ok", message: "Podcast TTS Long Audio API" });
+const app = express();
+app.use(express.json({ limit: "2mb" }));
+app.use(cors());
+
+app.get("/", (_req, res) => {
+  res.json({ ok: true, service: "podcast-tts-long-audio", version: "1.0.0" });
 });
 
-app.use("/compose", composeRouter);
-app.use("/tts/long", ttsLongRouter);
+app.get("/healthz", (_req, res) => res.status(200).send("ok"));
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.use("/tts/long", longTtsRouter);
+
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  console.log(`[tts-long] listening on :${port}`);
+});
