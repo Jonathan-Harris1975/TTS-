@@ -4,80 +4,94 @@ import { GoogleAuth } from "google-auth-library";
 
 const router = express.Router();
 
-// Get Google OAuth token from service account or pass-through header
+// Helper to obtain a Google OAuth token either via a service account JSON
+// (provided in env GOOGLE_CREDENTIALS) or pass-through Authorization: Bearer <token>
 async function getGoogleToken(passThroughAuth, req) {
   if (passThroughAuth && req.headers.authorization) {
-    return req.headers.authorization.split(" ")[1];
+    const parts = req.headers.authorization.split(" ");
+    if (parts[0].toLowerCase() === "bearer" && parts[1]) return parts[1];
   }
-
   const auth = new GoogleAuth({
     credentials: process.env.GOOGLE_CREDENTIALS
       ? JSON.parse(process.env.GOOGLE_CREDENTIALS)
       : undefined,
-    scopes: ["https://www.googleapis.com/auth/cloud-platform"]
+    scopes: ["https://www.googleapis.com/auth/cloud-platform"],
   });
   const client = await auth.getClient();
-  const tokenResponse = await client.getAccessToken();
-  return tokenResponse.token;
+  const { token } = await client.getAccessToken();
+  return token;
 }
 
 /**
+ * Start a long audio synthesis operation.
  * POST /tts/long/start
- * Body: { tts: {...}, outputGcsUri: "gs://bucket/file.mp3", projectNumber?: "...", passThroughAuth?: true }
+ * Body:
+ * {
+ *   "input": { "text": "..."} or { "ssml": "..." },
+ *   "voice": { "languageCode": "en-GB", "name": "en-GB-Wavenet-B" },
+ *   "audioConfig": { "audioEncoding": "MP3", "speakingRate": 1.0 },
+ *   "outputGcsUri": "gs://bucket/path/output.mp3"
+ * }
+ * Optional: projectId, location (defaults env GCP_PROJECT_ID / GCP_LOCATION)
  */
 router.post("/start", async (req, res) => {
   try {
-    const { tts, outputGcsUri, projectNumber, passThroughAuth } = req.body;
-    if (!tts || !outputGcsUri) {
-      return res.status(400).json({ error: "tts and outputGcsUri are required" });
+    const {
+      input,
+      voice,
+      audioConfig,
+      outputGcsUri,
+      projectId,
+      location,
+    } = req.body || {};
+
+    if (!input || !audioConfig or !outputGcsUri) {
+      return res.status(400).json({ error: "input, audioConfig, and outputGcsUri are required" });
     }
 
-    const projectNum = projectNumber || process.env.PROJECT_NUMBER;
-    if (!projectNum) {
-      return res.status(400).json({ error: "projectNumber missing" });
-    }
+    const proj = projectId || process.env.GCP_PROJECT_ID;
+    const loc  = location  || process.env.GCP_LOCATION || "us-central1";
+    if (!proj) return res.status(400).json({ error: "projectId missing (body or env GCP_PROJECT_ID)" });
 
-    const token = await getGoogleToken(passThroughAuth, req);
+    const name = `projects/${proj}/locations/${loc}:longAudioSynthesize`;
+    const token = await getGoogleToken(process.env.PASS_THROUGH_AUTH === "true", req);
 
-    const endpoint = `https://texttospeech.googleapis.com/v1beta1/projects/${projectNum}/locations/global:synthesizeLongAudio`;
-    const body = { ...tts, outputGcsUri };
+    const body = { input, voice, audioConfig, outputGcsUri };
+    const endpoint = `https://texttospeech.googleapis.com/v1beta1/${name}`;
 
     const r = await fetch(endpoint, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${token}`,
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
 
     const data = await r.json();
-    res.status(r.ok ? 200 : 400).json(data);
+    const statusCode = r.ok ? 200 : r.status || 400;
+    res.status(statusCode).json(data);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err?.message || String(err) });
   }
 });
 
 /**
- * GET /tts/long/status?name=projects/.../operations/...
+ * Poll an operation by its name returned from /start
+ * GET /tts/long/status?name=operations/123
  */
 router.get("/status", async (req, res) => {
   try {
-    const { name, passThroughAuth } = req.query;
-    if (!name) {
-      return res.status(400).json({ error: "operation name is required" });
-    }
-
-    const token = await getGoogleToken(passThroughAuth, req);
+    const name = req.query.name;
+    if (!name) return res.status(400).json({ error: "name query param required" });
+    const token = await getGoogleToken(process.env.PASS_THROUGH_AUTH === "true", req);
     const endpoint = `https://texttospeech.googleapis.com/v1beta1/${name}`;
-
-    const r = await fetch(endpoint, {
-      headers: { "Authorization": `Bearer ${token}` }
-    });
+    const r = await fetch(endpoint, { headers: { "Authorization": `Bearer ${token}` } });
     const data = await r.json();
-    res.status(r.ok ? 200 : 400).json(data);
+    const statusCode = r.ok ? 200 : r.status || 400;
+    res.status(statusCode).json(data);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err?.message || String(err) });
   }
 });
 
