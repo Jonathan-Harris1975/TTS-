@@ -1,7 +1,0 @@
-services:
-  - type: web
-    name: tts-long-audio
-    env: node
-    buildCommand: npm install
-    startCommand: npm start
-    rootDir: .
