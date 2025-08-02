@@ -1,4 +1,3 @@
-
 import express from "express";
 import { TextToSpeechClient } from "@google-cloud/text-to-speech";
 import { Storage } from "@google-cloud/storage";
@@ -10,7 +9,6 @@ const router = express.Router();
 
 // ---- Clients ----
 function makeGcpTtsClient() {
-  // Prefer inline GOOGLE_CREDENTIALS; fall back to default ADC
   if (process.env.GOOGLE_CREDENTIALS) {
     try {
       const creds = JSON.parse(process.env.GOOGLE_CREDENTIALS);
@@ -31,22 +29,29 @@ function makeGcsClient() {
 }
 
 function makeR2Client() {
-  const { R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT } = process.env;
-  if (!R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !R2_ENDPOINT) return null;
+  // Support BOTH your existing global names and the conventional AWS-style names
+  const {
+    R2_ACCESS_KEY_ID,     // conventional
+    R2_SECRET_ACCESS_KEY, // conventional
+    R2_ACCESS_KEY,        // your existing
+    R2_SECRET_KEY,        // your existing
+    R2_ENDPOINT
+  } = process.env;
+
+  const accessKeyId = R2_ACCESS_KEY_ID || R2_ACCESS_KEY;
+  const secretAccessKey = R2_SECRET_ACCESS_KEY || R2_SECRET_KEY;
+
+  if (!accessKeyId || !secretAccessKey || !R2_ENDPOINT) return null;
+
   return new S3Client({
     region: "auto",
     endpoint: R2_ENDPOINT,
-    credentials: {
-      accessKeyId: R2_ACCESS_KEY_ID,
-      secretAccessKey: R2_SECRET_ACCESS_KEY,
-    },
+    credentials: { accessKeyId, secretAccessKey },
   });
 }
 
 // ---- Helpers ----
 function toSsmlChunks(plainText, maxLen = 3000) {
-  // Ensure we wrap each chunk in <speak> ... </speak>
-  // Split on paragraph-ish boundaries while keeping flow.
   const paras = String(plainText).replace(/\r\n/g, "\n").split(/\n{2,}/);
   const chunks = [];
   let buf = "";
@@ -64,7 +69,6 @@ function toSsmlChunks(plainText, maxLen = 3000) {
     if ((buf + (buf ? " " : "") + part).length <= maxLen) {
       buf += (buf ? " " : "") + part;
     } else {
-      // try sentence level split
       const sentences = part.split(/(?<=[.!?])\s+/);
       for (const s of sentences) {
         if ((buf + (buf ? " " : "") + s).length <= maxLen) {
@@ -72,7 +76,6 @@ function toSsmlChunks(plainText, maxLen = 3000) {
         } else {
           push();
           if (s.length > maxLen) {
-            // hard wrap if a single sentence is massive
             let i = 0;
             while (i < s.length) {
               const slice = s.slice(i, i + maxLen - 50);
@@ -92,8 +95,6 @@ function toSsmlChunks(plainText, maxLen = 3000) {
 }
 
 function approxBytesFromBase64(b64) {
-  // MP3 base64 length approx -> bytes
-  // 4 base64 chars ~ 3 bytes
   return Math.floor((b64.length * 3) / 4);
 }
 
@@ -105,10 +106,10 @@ router.post("/chunked", async (req, res) => {
     audioConfig,
     concurrency = 3,
     returnBase64 = false,
-    // Storage options
-    GCS_BUCKET,
+    // storage
     R2_BUCKET,
     R2_PREFIX = "",
+    GCS_BUCKET
   } = req.body || {};
 
   if (!text || typeof text !== "string") {
@@ -119,9 +120,8 @@ router.post("/chunked", async (req, res) => {
   const gcs = makeGcsClient();
   const r2 = makeR2Client();
 
-  // prefer env if not given in body
-  const gcsBucket = GCS_BUCKET || process.env.GCS_BUCKET;
   const r2Bucket = R2_BUCKET || process.env.R2_BUCKET;
+  const gcsBucket = GCS_BUCKET || process.env.GCS_BUCKET;
   const r2PublicBase = process.env.R2_PUBLIC_BASE_URL; // e.g. https://pub-xxxx.r2.dev
 
   try {
@@ -140,9 +140,7 @@ router.post("/chunked", async (req, res) => {
           let url = null;
 
           if (!returnBase64) {
-            const filename = `${(R2_PREFIX || "tts")}-${Date.now()}-${index
-              .toString()
-              .padStart(3, "0")}.mp3`;
+            const filename = `${(R2_PREFIX || "tts")}-${Date.now()}-${String(index).padStart(3,"0")}.mp3`;
 
             if (r2 && r2Bucket) {
               const put = new PutObjectCommand({
@@ -150,12 +148,9 @@ router.post("/chunked", async (req, res) => {
                 Key: filename,
                 Body: Buffer.from(b64, "base64"),
                 ContentType: "audio/mpeg",
-                ACL: undefined, // R2 ignores ACL when using public bucket policy
               });
               await r2.send(put);
-              if (r2PublicBase) {
-                url = `${r2PublicBase.replace(/\/+$/, "")}/${filename}`;
-              }
+              if (r2PublicBase) url = `${r2PublicBase.replace(/\/+$/,"")}/${filename}`;
             } else if (gcsBucket) {
               const file = gcs.bucket(gcsBucket).file(filename);
               await file.save(Buffer.from(b64, "base64"), { contentType: "audio/mpeg" });
@@ -180,15 +175,11 @@ router.post("/chunked", async (req, res) => {
     return res.json({
       count: results.length,
       chunks: results.map(({ index, ssml, bytesApprox, url, base64 }) => ({
-        index,
-        ssml,
-        bytesApprox,
-        url,
-        base64,
+        index, ssml, bytesApprox, url, base64
       })),
       summaryBytesApprox: _.sumBy(results, "bytesApprox"),
       storage: {
-        r2: Boolean(r2 && (R2_BUCKET || process.env.R2_BUCKET)),
+        r2: Boolean(r2 && (r2Bucket)),
         gcs: Boolean(gcsBucket),
       },
     });
