@@ -10,7 +10,7 @@ app.use(express.json({ limit: "2mb" }));
 app.use(cors());
 
 app.get("/", (_req, res) => {
-  res.json({ ok: true, service: "podcast-tts-long-audio", version: "1.0.0" });
+  res.json({ ok: true, service: "podcast-tts-long-audio", version: "1.0.1" });
 });
 
 app.get("/healthz", (_req, res) => res.status(200).send("ok"));
