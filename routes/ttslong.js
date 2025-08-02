@@ -10,9 +10,7 @@ async function getGoogleToken(passThroughAuth, req) {
     if (parts[0].toLowerCase() === "bearer" && parts[1]) return parts[1];
   }
   const auth = new GoogleAuth({
-    credentials: process.env.GOOGLE_CREDENTIALS
-      ? JSON.parse(process.env.GOOGLE_CREDENTIALS)
-      : undefined,
+    credentials: process.env.GOOGLE_CREDENTIALS ? JSON.parse(process.env.GOOGLE_CREDENTIALS) : undefined,
     scopes: ["https://www.googleapis.com/auth/cloud-platform"],
   });
   const client = await auth.getClient();
@@ -23,9 +21,11 @@ async function getGoogleToken(passThroughAuth, req) {
 router.post("/start", async (req, res) => {
   try {
     const { input, voice, audioConfig, outputGcsUri, projectId, location } = req.body || {};
+
     if (!input || !audioConfig || !outputGcsUri) {
       return res.status(400).json({ error: "input, audioConfig, and outputGcsUri are required" });
     }
+
     const proj = projectId || process.env.GCP_PROJECT_ID;
     const loc  = location  || process.env.GCP_LOCATION || "us-central1";
     if (!proj) return res.status(400).json({ error: "projectId missing (body or env GCP_PROJECT_ID)" });
@@ -33,9 +33,9 @@ router.post("/start", async (req, res) => {
     const name = `projects/${proj}/locations/${loc}:longAudioSynthesize`;
     const token = await getGoogleToken(process.env.PASS_THROUGH_AUTH === "true", req);
     const body = { input, voice, audioConfig, outputGcsUri };
-    const endpoint = `https://texttospeech.googleapis.com/v1beta1/${name}`;
+    const endpoint = `https://texttospeech.googleapis.com/v1/${name}`; // switched to v1
 
-    console.log("[tts-long/start] request", { name, outputGcsUri, hasToken: !!token });
+    console.log("[tts-long/start] endpoint:", endpoint, "output:", outputGcsUri);
 
     const r = await fetch(endpoint, {
       method: "POST",
@@ -63,8 +63,10 @@ router.get("/status", async (req, res) => {
     const name = req.query.name;
     if (!name) return res.status(400).json({ error: "name query param required" });
     const token = await getGoogleToken(process.env.PASS_THROUGH_AUTH === "true", req);
-    const endpoint = `https://texttospeech.googleapis.com/v1beta1/${name}`;
-    console.log("[tts-long/status] fetch", { name, hasToken: !!token });
+    const endpoint = `https://texttospeech.googleapis.com/v1/${name}`;
+
+    console.log("[tts-long/status] endpoint:", endpoint);
+
     const r = await fetch(endpoint, { headers: { "Authorization": `Bearer ${token}` } });
     const text = await r.text();
     try {
