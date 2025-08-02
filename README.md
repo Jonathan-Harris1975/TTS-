@@ -1,46 +1,44 @@
 # tts-chunker-service
 
-Render-ready Node service that splits long text into SSML chunks (<= ~4400 chars) and synthesizes each chunk using the **standard Google TTS v1** API. No long-audio needed.
+Small Express service that splits long text into SSML-safe chunks and calls **Google TTS v1** for each chunk.
+Outputs either **R2 URLs**, **GCS URLs**, or base64 depending on configuration.
 
-## Endpoints
+## Deploy (Render)
 
-### POST /tts/chunked
-Request body:
+1. Create a Web Service (Node 20+).
+2. Build command: `npm install`
+3. Start command: `npm start`
+4. Add environment variables:
+   - For Google: either `GOOGLE_APPLICATION_CREDENTIALS` (path to mounted secret) **or** `GOOGLE_CREDENTIALS` (inline JSON).
+   - For R2 (preferred): `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT`, `R2_BUCKET`, `R2_PUBLIC_BASE_URL`.
+   - Optional: `GCS_BUCKET` as fallback.
+
+## Endpoint
+
+`POST /tts/chunked`
+
+Body:
 ```json
 {
-  "text": "Very long text ...",
+  "text": "long script ...",
   "voice": { "languageCode": "en-GB", "name": "en-GB-Wavenet-B" },
   "audioConfig": { "audioEncoding": "MP3", "speakingRate": 1.0 },
-  "bucket": "podcast-tt",
-  "prefix": "tts-tests/output-20250802-",
   "concurrency": 3,
-  "returnBase64": false
+  "R2_BUCKET": "podcast-tt",
+  "R2_PREFIX": "raw-2025-08-02"
 }
 ```
+
 Response:
 ```json
 {
-  "count": 5,
+  "count": 3,
   "chunks": [
-    {"index":0, "gcsUri":"gs://podcast-tt/tts-tests/output-20250802-000.mp3"},
+    {"index":0,"bytesApprox":12345,"url":"https://pub-.../raw-2025-08-02-000.mp3"},
     ...
-  ]
+  ],
+  "summaryBytesApprox": 45678
 }
 ```
 
-- If `bucket` is omitted, it returns `base64` audio if `returnBase64: true`.
-- Service account must have TTS + Storage write on the bucket.
-
-## Deploy (Render)
-- Build: `npm install`
-- Start: `npm start`
-- Node: 20+
-- Env:
-  - `GOOGLE_CREDENTIALS` = service account JSON string (or use `GOOGLE_APPLICATION_CREDENTIALS` file path)
-- Optional:
-  - `PORT`
-
-## Notes
-- Chunker respects paragraph/sentence boundaries where possible.
-- Each chunk is wrapped with `<speak> ... </speak>` and inserts a small `<break>` between paragraphs.
-- For final merging, use your existing merge service, or any ffmpeg join on the produced MP3s.
+If neither R2 nor GCS are configured, set `"returnBase64": true` to receive `base64` fields instead of URLs.
