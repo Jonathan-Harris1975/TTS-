@@ -4,23 +4,25 @@ import { TextToSpeechClient } from '@google-cloud/text-to-speech';
 const router = express.Router();
 const ttsClient = new TextToSpeechClient();
 
-// Text sanitization helper
+// Text sanitizer
 const sanitizeText = (text) => {
+  if (!text) return '';
   return String(text)
     .replace(/[\u2018\u2019\u201C\u201D]/g, '') // Remove fancy quotes
     .replace(/[^\w\s.,!?;:'"-]/g, '')          // Remove special chars
+    .replace(/\s+/g, ' ')                      // Collapse whitespace
+    .trim()
     .slice(0, 5000);                           // Limit length
 };
 
+// TTS endpoint
 router.post('/chunked', async (req, res) => {
   try {
-    const { text } = req.body;
-    
-    if (!text) {
+    if (!req.body || typeof req.body !== 'object') {
       return res.status(400).json({
-        error: 'Text is required',
+        error: 'Request body must be JSON',
         example: {
-          text: "Hello world",
+          text: "Your text here",
           voice: {
             languageCode: "en-GB",
             name: "en-GB-Wavenet-B"
@@ -29,7 +31,16 @@ router.post('/chunked', async (req, res) => {
       });
     }
 
+    const { text } = req.body;
     const cleanText = sanitizeText(text);
+
+    if (!cleanText) {
+      return res.status(400).json({
+        error: 'Text cannot be empty after sanitization',
+        originalText: text?.slice(0, 100)
+      });
+    }
+
     const [response] = await ttsClient.synthesizeSpeech({
       input: { text: cleanText },
       voice: req.body.voice || {
@@ -44,8 +55,7 @@ router.post('/chunked', async (req, res) => {
 
     res.json({
       success: true,
-      originalLength: text.length,
-      cleanLength: cleanText.length,
+      textLength: cleanText.length,
       audioLength: response.audioContent.length
     });
 
@@ -54,6 +64,7 @@ router.post('/chunked', async (req, res) => {
       message: err.message,
       textSample: req.body.text?.slice(0, 100)
     });
+    
     res.status(500).json({
       error: 'TTS processing failed',
       details: process.env.NODE_ENV !== 'production' ? err.message : undefined
