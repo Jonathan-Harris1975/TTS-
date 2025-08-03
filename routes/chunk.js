@@ -3,113 +3,107 @@ import { TextToSpeechClient } from '@google-cloud/text-to-speech';
 
 const router = express.Router();
 
-// Configuration with validation
-const { GOOGLE_CREDENTIALS, GCP_PROJECT_ID } = process.env;
-
-// Initialize TTS client with verbose logging
+// Initialize TTS client
 let ttsClient;
 try {
-  console.log('ℹ️ Initializing TTS client with credentials:', 
-    GOOGLE_CREDENTIALS ? '***' + GOOGLE_CREDENTIALS.slice(-10) : 'MISSING');
-  
-  if (!GOOGLE_CREDENTIALS) throw new Error('GOOGLE_CREDENTIALS missing');
-  
-  const credentials = JSON.parse(GOOGLE_CREDENTIALS);
+  if (!process.env.GOOGLE_CREDENTIALS) {
+    throw new Error('GOOGLE_CREDENTIALS environment variable is missing');
+  }
+
+  const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS);
   ttsClient = new TextToSpeechClient({
     credentials,
-    projectId: GCP_PROJECT_ID
+    projectId: process.env.GCP_PROJECT_ID
   });
-  
-  // Verify connection
+
+  // Test the connection
   await ttsClient.listVoices({});
-  console.log('✅ TTS client initialized and verified');
+  console.log('✅ Google TTS client initialized successfully');
 } catch (err) {
-  console.error('❌ TTS initialization failed:', {
+  console.error('❌ Failed to initialize TTS client:', {
     message: err.message,
     stack: err.stack,
-    credentialsPresent: !!GOOGLE_CREDENTIALS,
-    credentialsLength: GOOGLE_CREDENTIALS?.length,
-    projectId: GCP_PROJECT_ID
+    credentialsPresent: !!process.env.GOOGLE_CREDENTIALS,
+    credentialsValid: isJson(process.env.GOOGLE_CREDENTIALS),
+    projectId: process.env.GCP_PROJECT_ID
   });
   throw err;
 }
 
-// Enhanced chunked endpoint with request diagnostics
+// Helper function to check if string is JSON
+function isJson(str) {
+  try {
+    JSON.parse(str);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// TTS Processing Endpoint
 router.post('/chunked', async (req, res) => {
   const requestId = Date.now();
+  
   try {
-    console.log(`ℹ️ [${requestId}] Request received:`, {
-      method: req.method,
-      headers: {
-        'content-type': req.get('content-type'),
-        'content-length': req.get('content-length')
-      },
-      bodyKeys: req.body ? Object.keys(req.body) : 'empty'
-    });
-
-    // Validate input
+    console.log(`ℹ️ [${requestId}] Request received`);
+    
     if (!req.body) {
-      console.warn(`⚠️ [${requestId}] No body received`);
-      return res.status(400).json({ error: "Request body is required" });
+      throw new Error('Request body is missing');
     }
 
     const { text, voice, audioConfig } = req.body;
-    
+
     if (!text) {
-      console.warn(`⚠️ [${requestId}] Missing text parameter`);
-      return res.status(400).json({ 
-        error: "text parameter is required",
+      return res.status(400).json({
+        error: 'Text parameter is required',
         example: {
-          text: "Hello world",
+          text: 'Hello world',
           voice: {
-            languageCode: "en-GB",
-            name: "en-GB-Wavenet-B"
+            languageCode: 'en-GB',
+            name: 'en-GB-Wavenet-B'
           },
           audioConfig: {
-            audioEncoding: "MP3"
+            audioEncoding: 'MP3'
           }
         }
       });
     }
 
-    console.log(`ℹ️ [${requestId}] Processing text (first 50 chars):`, 
-      text.length > 50 ? text.slice(0, 50) + '...' : text);
-
-    // Process with timeout - FIXED SYNTAX HERE
+    // Process with timeout
     const ttsPromise = ttsClient.synthesizeSpeech({
       input: { text },
       voice: voice || {
-        languageCode: "en-GB",
-        name: "en-GB-Wavenet-B"
+        languageCode: 'en-GB',
+        name: 'en-GB-Wavenet-B'
       },
       audioConfig: audioConfig || {
-        audioEncoding: "MP3",
+        audioEncoding: 'MP3',
         speakingRate: 1.0
       }
     });
 
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error("TTS timeout after 10s")), 10000);
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('TTS processing timeout')), 10000);
+    });
 
     const response = await Promise.race([ttsPromise, timeoutPromise]);
 
-    console.log(`✅ [${requestId}] TTS successful`);
     res.json({
       success: true,
       audioLength: response[0].audioContent.length
     });
 
   } catch (err) {
-    console.error(`❌ [${requestId}] Processing error:`, {
+    console.error(`❌ [${requestId}] Error:`, {
       message: err.message,
       stack: err.stack,
-      bodySample: req.body ? JSON.stringify(req.body).slice(0, 100) : 'empty'
+      body: req.body ? '***' : 'empty'
     });
 
     res.status(500).json({
-      error: "TTS processing failed",
+      error: 'Failed to process TTS request',
       requestId,
-      details: process.env.NODE_ENV !== 'production' ? err.message : undefined
+      ...(process.env.NODE_ENV !== 'production' && { details: err.message })
     });
   }
 });
