@@ -3,7 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
 import winston from 'winston';
-import chunkRouter from './chunk.js'; // Updated import path
+import chunkRouter from './routes/chunk.js'; // Corrected import path
 
 // Initialize environment
 dotenv.config();
