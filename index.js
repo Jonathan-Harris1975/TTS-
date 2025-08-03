@@ -3,17 +3,38 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import chunkRouter from './routes/chunk.js';
 
-// Initialize environment
+// Initialize and validate environment
 dotenv.config();
 
-// Verify essential environment variables
-const requiredEnvVars = ['GOOGLE_CREDENTIALS'];
-const missingVars = requiredEnvVars.filter(v => !process.env[v]);
+// Validate required environment variables
+const validateEnvironment = () => {
+  const requiredVars = {
+    GOOGLE_CREDENTIALS: 'Google Cloud credentials',
+    PORT: 'Server port'
+  };
 
-if (missingVars.length > 0) {
-  console.error('❌ Missing required environment variables:', missingVars);
-  process.exit(1);
-}
+  const missingVars = Object.entries(requiredVars)
+    .filter(([key]) => !process.env[key])
+    .map(([_, name]) => name);
+
+  if (missingVars.length > 0) {
+    console.error('❌ Missing required environment variables:', missingVars.join(', '));
+    process.exit(1);
+  }
+
+  // Validate JSON credentials
+  try {
+    JSON.parse(process.env.GOOGLE_CREDENTIALS);
+  } catch (err) {
+    console.error('❌ Invalid GOOGLE_CREDENTIALS JSON:', {
+      error: err.message,
+      sample: process.env.GOOGLE_CREDENTIALS?.slice(0, 100) + '...'
+    });
+    process.exit(1);
+  }
+};
+
+validateEnvironment();
 
 // Create Express app
 const app = express();
@@ -23,20 +44,11 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Test endpoint
-app.get('/test', (req, res) => {
+// Health endpoints
+app.get('/health', (req, res) => {
   res.json({
-    status: 'ok',
-    message: 'Service is running',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development'
-  });
-});
-
-// Health check endpoint
-app.get('/healthz', (req, res) => {
-  res.status(200).json({
     status: 'healthy',
+    timestamp: new Date().toISOString(),
     services: {
       google: !!process.env.GOOGLE_CREDENTIALS,
       r2: !!process.env.R2_ACCESS_KEY
@@ -44,21 +56,38 @@ app.get('/healthz', (req, res) => {
   });
 });
 
+app.get('/test', (req, res) => {
+  res.json({
+    status: 'ok',
+    message: 'Service is operational',
+    environment: process.env.NODE_ENV || 'development'
+  });
+});
+
 // API routes
 app.use('/tts', chunkRouter);
 
-// Error handling middleware
+// Error handling
 app.use((err, req, res, next) => {
-  console.error('Server Error:', err.message);
+  const errorId = Date.now();
+  console.error(`[${errorId}]`, {
+    message: err.message,
+    stack: err.stack,
+    path: req.path,
+    method: req.method
+  });
+
   res.status(500).json({
     error: 'Internal Server Error',
+    errorId,
     ...(process.env.NODE_ENV !== 'production' && { details: err.message })
   });
 });
 
-// Start server - USING serverPort INSTEAD OF port TO AVOID DUPLICATION
-const serverPort = process.env.PORT || 3000;
+// Start server
+const serverPort = parseInt(process.env.PORT) || 3000;
 app.listen(serverPort, () => {
   console.log(`🚀 Server running on port ${serverPort}`);
-  console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🛠️  Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log('🔍 Monitoring ready at /health');
 });
