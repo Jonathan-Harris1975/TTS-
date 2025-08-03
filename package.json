@@ -2,12 +2,15 @@
   "name": "tts-chunker-service",
   "version": "1.1.0",
   "type": "module",
-  "main": "src/index.js",
+  "main": "index.js",  // Changed from src/index.js
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "nodemon src/index.js",
+    "start": "node ./index.js",  // Changed path
+    "dev": "nodemon ./index.js", // Changed path
+    "build": "npm install",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
+  // ... rest remains the same
+
   "dependencies": {
     "@aws-sdk/client-s3": "^3.669.0",
     "@aws-sdk/lib-storage": "^3.669.0",
@@ -20,5 +23,5 @@
   },
   "devDependencies": {
     "nodemon": "^3.1.0"
-  }
+  
 }
