@@ -1,7 +1,11 @@
-// Updated chunk.js with proper chunking implementation
+import express from 'express';
+import { TextToSpeechClient } from '@google-cloud/text-to-speech';
 import { Upload } from '@aws-sdk/lib-storage';
 import { S3Client } from '@aws-sdk/client-s3';
 import { Storage } from '@google-cloud/storage';
+
+const router = express.Router();
+const ttsClient = new TextToSpeechClient();
 
 // Initialize storage clients conditionally
 const r2Client = process.env.R2_ACCESS_KEY_ID ? new S3Client({
@@ -122,12 +126,12 @@ router.post('/chunked', async (req, res) => {
       };
     };
 
-    // Process with limited concurrency
+    // Fixed Promise.all implementation
     const results = await Promise.all(
-      chunks.map((_, index) => 
+      chunks.map((chunk, index) => 
         new Promise(resolve => 
-          setTimeout(async () => 
-            resolve(await processChunk(chunks[index], index)), 
+          setTimeout(
+            () => resolve(processChunk(chunk, index)), 
             index * 1000 / concurrency
           )
         )
@@ -152,3 +156,5 @@ router.post('/chunked', async (req, res) => {
     });
   }
 });
+
+export default router;
