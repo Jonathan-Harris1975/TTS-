@@ -9,7 +9,7 @@ import pLimit from "p-limit";
 
 const router = express.Router();
 
-/* ------------------------------ helpers ------------------------------ */
+/* ------------------------------ Helpers ------------------------------ */
 const oneLine = (s) => String(s ?? "").replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
 const looksLikeSSML = (s) => /<speak[\s>]/i.test(String(s || ""));
 const wrapSpeak = (s) => (looksLikeSSML(s) ? oneLine(s) : `<speak>${oneLine(s)}</speak>`);
@@ -17,7 +17,6 @@ const stripLabelPrefix = (s) => String(s || "").replace(/^\s*(intro|main|outro)\
 const stripSpeak = (s) =>
   String(s ?? "").replace(/^\s*<speak[^>]*>/i, "").replace(/<\/speak>\s*$/i, "");
 
-// SSML -> plain (fix "A I" → "AI", drop tags)
 const ssmlToPlain = (s) => {
   let t = String(s ?? "");
   t = stripSpeak(t);
@@ -81,10 +80,12 @@ function normalizeMain(input) {
 
 const tryParseJson = (s) => { try { return JSON.parse(s); } catch { return null; } };
 
-/* ---------------------------- core composition --------------------------- */
+/* ---------------------------- Core Composition --------------------------- */
 function buildOutputs(body = {}, q = {}) {
+  // Get values from either body or query params
   const name = (body.name || q.name || "en-GB-Wavenet-B").toString();
   const r2Prefix = (body.r2Prefix || q.r2Prefix || "podcast").toString();
+  const text = body.text || q.text || "";
 
   let intro = "";
   if (body.intro) intro = normalizeSpeak(body.intro);
@@ -96,7 +97,7 @@ function buildOutputs(body = {}, q = {}) {
   else if (body.textOutro) outro = normalizeSpeak(body.textOutro);
   else if (q.outro) outro = normalizeSpeak(q.outro);
 
-  let mainNorm = normalizeMain(body.main ?? body.textMain ?? body.text);
+  let mainNorm = normalizeMain(body.main ?? body.textMain ?? (text ? { text } : null));
   if (!mainNorm.chunks.length) {
     const chunkKeys = Object.keys(q)
       .filter((k) => /^mainChunk\d+$/i.test(k))
@@ -125,73 +126,18 @@ function buildOutputs(body = {}, q = {}) {
   const introText = intro ? ssmlToPlain(intro) : "";
   const mainBodiesText = mainNorm.chunks.map((c) => ssmlToPlain(c));
   const outroText = outro ? ssmlToPlain(outro) : "";
-  const text = [introText, ...mainBodiesText, outroText].filter(Boolean).join(" ");
+  const fullText = [introText, ...mainBodiesText, outroText].filter(Boolean).join(" ");
 
   return {
-    name, 
+    name,
     r2Prefix,
     normalized: { intro, main: { chunks: mainNorm.chunks }, main_merged: mergedMain, outro },
     ssml: mergedEpisode || mergedMain || intro || outro,
-    text
+    text: fullText
   };
 }
 
-/* ------------------------------ JSON route ------------------------------ */
-router.post("/ready-for-tts", (req, res) => {
-  try {
-    let body = typeof req.body === "undefined" ? {} : req.body;
-    if (typeof body === "string") {
-      const parsed = tryParseJson(body);
-      if (parsed && typeof parsed === "object") body = parsed;
-      else return res.status(400).json({ error: "Body must be JSON or form data. Set Content-Type: application/json." });
-    }
-    if (typeof body !== "object" || body === null) {
-      return res.status(400).json({ error: "Body must be a JSON object or form fields." });
-    }
-
-    const out = buildOutputs(body, req.query || {});
-    if (out.error) return res.status(400).json({ error: out.error });
-
-    const strict = String((req.query.strict ?? "")).toLowerCase() === "1";
-    const ascii = String((req.query.ascii ?? "")).toLowerCase() === "1";
-    const textClean = strict ? strictClean(out.text, { ascii, join: "space" }) : out.text;
-
-    return res.json({
-      voice: { languageCode: "en-GB", name: out.name },
-      audioConfig: { audioEncoding: "MP3", speakingRate: 1.0 },
-      R2_PREFIX: out.r2Prefix,
-      normalized: out.normalized,
-      ssml: out.ssml,
-      text: textClean
-    });
-  } catch (e) {
-    return res.status(500).json({ error: e?.message || String(e) });
-  }
-});
-
-/* --------------------------- PURE TEXT route --------------------------- */
-router.post("/plain", (req, res) => {
-  try {
-    let body = typeof req.body === "undefined" ? {} : req.body;
-    if (typeof body === "string") {
-      const parsed = tryParseJson(body);
-      if (parsed && typeof parsed === "object") body = parsed;
-      else body = {};
-    }
-    const out = buildOutputs(body, req.query || {});
-    if (out.error) return res.status(400).type("text/plain; charset=utf-8").send(out.error);
-
-    const strict = String((req.query.strict ?? "")).toLowerCase() === "1";
-    const ascii = String((req.query.ascii ?? "")).toLowerCase() === "1";
-    const text = strict ? strictClean(out.text, { ascii, join: "space" }) : out.text;
-
-    res.type("text/plain; charset=utf-8").send(text);
-  } catch (e) {
-    res.status(500).type("text/plain; charset=utf-8").send(String(e?.message || e));
-  }
-});
-
-// R2 config
+/* ------------------------------ Clients Setup ------------------------------ */
 const {
   R2_ACCESS_KEY_ID,
   R2_ACCESS_KEY,
@@ -202,17 +148,11 @@ const {
   R2_PUBLIC_BASE_URL
 } = process.env;
 
-// Google Cloud config
 const {
   GOOGLE_APPLICATION_CREDENTIALS,
   GOOGLE_CREDENTIALS,
   GCS_BUCKET
 } = process.env;
-
-// Initialize clients
-const r2Client = getR2Client();
-const ttsClient = new TextToSpeechClient();
-const gcsClient = GCS_BUCKET ? new Storage() : null;
 
 function getR2Client() {
   const accessKeyId = R2_ACCESS_KEY_ID || R2_ACCESS_KEY;
@@ -226,6 +166,11 @@ function getR2Client() {
   });
 }
 
+const r2Client = getR2Client();
+const ttsClient = new TextToSpeechClient();
+const gcsClient = GCS_BUCKET ? new Storage() : null;
+
+/* ---------------------------- TTS Functions ---------------------------- */
 async function synthesizeSpeech(text, voice, audioConfig) {
   const [response] = await ttsClient.synthesizeSpeech({
     input: { ssml: text },
@@ -260,9 +205,29 @@ async function uploadToGCS(buffer, key) {
   return `https://storage.googleapis.com/${GCS_BUCKET}/${key}`;
 }
 
-/* ---------------------------- TTS Chunked Route --------------------------- */
+/* ---------------------------- API Endpoints ---------------------------- */
 router.post("/chunked", async (req, res) => {
   try {
+    // Accept input from either query params or body
+    const inputParams = req.query.text ? { ...req.query } : req.body;
+    
+    // Parse JSON strings from query params if needed
+    if (typeof inputParams.voice === "string") {
+      try {
+        inputParams.voice = JSON.parse(inputParams.voice);
+      } catch (e) {
+        return res.status(400).json({ error: "Invalid voice format. Must be valid JSON" });
+      }
+    }
+    
+    if (typeof inputParams.audioConfig === "string") {
+      try {
+        inputParams.audioConfig = JSON.parse(inputParams.audioConfig);
+      } catch (e) {
+        return res.status(400).json({ error: "Invalid audioConfig format. Must be valid JSON" });
+      }
+    }
+
     const {
       text,
       voice = { languageCode: "en-GB", name: "en-GB-Wavenet-B" },
@@ -271,14 +236,14 @@ router.post("/chunked", async (req, res) => {
       R2_BUCKET: overrideR2Bucket,
       R2_PREFIX = "raw-" + new Date().toISOString().split("T")[0],
       returnBase64 = false
-    } = req.body;
+    } = inputParams;
 
     if (!text) {
-      return res.status(400).json({ error: "Text is required" });
+      return res.status(400).json({ error: "Text is required as 'text' query parameter or in request body" });
     }
 
     // Normalize and chunk the text
-    const out = buildOutputs({ text }, {});
+    const out = buildOutputs({ text }, req.query);
     if (out.error) return res.status(400).json({ error: out.error });
 
     const ssmlChunks = out.normalized.main.chunks;
@@ -329,10 +294,6 @@ router.post("/chunked", async (req, res) => {
 
     const successfulChunks = results.filter(chunk => !chunk.error);
     const failedChunks = results.filter(chunk => chunk.error);
-
-    if (failedChunks.length > 0) {
-      console.error(`Failed to process ${failedChunks.length} chunks`);
-    }
 
     res.json({
       count: successfulChunks.length,
