@@ -32,6 +32,8 @@ const r2Client = process.env.R2_ACCESS_KEY ? new S3Client({
 
 if (r2Client) {
   console.log('R2 client initialized successfully');
+} else {
+  console.log('R2 client not configured - missing R2_ACCESS_KEY or R2_SECRET_KEY');
 }
 
 // Helper functions
@@ -53,17 +55,22 @@ const chunkText = (text, maxLength = 2000) => {
 };
 
 const uploadToR2 = async (buffer, key, bucket) => {
-  const upload = new Upload({
-    client: r2Client,
-    params: {
-      Bucket: bucket,
-      Key: key,
-      Body: buffer,
-      ContentType: 'audio/mpeg'
-    }
-  });
-  await upload.done();
-  return `${process.env.R2_PUBLIC_BASE_URL}/${key}`;
+  try {
+    const upload = new Upload({
+      client: r2Client,
+      params: {
+        Bucket: bucket,
+        Key: key,
+        Body: buffer,
+        ContentType: 'audio/mpeg'
+      }
+    });
+    await upload.done();
+    return `${process.env.R2_PUBLIC_BASE_URL}/${key}`;
+  } catch (err) {
+    console.error('R2 Upload Error:', err);
+    throw new Error('Failed to upload to R2 storage');
+  }
 };
 
 // Fast processing endpoint (GET)
@@ -113,4 +120,78 @@ router.get('/chunked/fast', async (req, res) => {
     res.json({
       status: 'success',
       base64: response.audioContent.toString('base64'),
-      textLength: cleanText
+      textLength: cleanText.length
+    });
+
+  } catch (err) {
+    console.error('Fast TTS Error:', err);
+    res.status(500).json({
+      error: 'TTS processing failed',
+      details: process.env.NODE_ENV !== 'production' ? err.message : undefined
+    });
+  }
+});
+
+// Full processing endpoint (POST)
+router.post('/chunked', async (req, res) => {
+  try {
+    if (!ttsClient) {
+      return res.status(500).json({ error: 'Google TTS not configured' });
+    }
+
+    const { text, voice, audioConfig, concurrency = 3, R2_BUCKET, R2_PREFIX } = req.body;
+
+    if (!text) {
+      return res.status(400).json({ error: 'Text is required' });
+    }
+
+    const cleanText = sanitizeText(text);
+    const chunks = chunkText(cleanText);
+    const bucket = R2_BUCKET || process.env.R2_BUCKET;
+
+    const results = await Promise.all(chunks.map(async (chunk, index) => {
+      const [response] = await ttsClient.synthesizeSpeech({
+        input: { text: chunk },
+        voice: voice || {
+          languageCode: 'en-GB',
+          name: 'en-GB-Wavenet-B'
+        },
+        audioConfig: audioConfig || {
+          audioEncoding: 'MP3',
+          speakingRate: 1.0
+        }
+      });
+
+      if (r2Client && bucket) {
+        const key = `${R2_PREFIX || 'tts'}-${index.toString().padStart(3, '0')}.mp3`;
+        const url = await uploadToR2(response.audioContent, key, bucket);
+        return {
+          index,
+          bytesApprox: response.audioContent.length,
+          url
+        };
+      }
+
+      return {
+        index,
+        bytesApprox: response.audioContent.length,
+        base64: response.audioContent.toString('base64')
+      };
+    }));
+
+    res.json({
+      count: chunks.length,
+      chunks: results,
+      summaryBytesApprox: results.reduce((sum, chunk) => sum + chunk.bytesApprox, 0)
+    });
+
+  } catch (err) {
+    console.error('TTS Error:', err);
+    res.status(500).json({
+      error: 'TTS processing failed',
+      details: process.env.NODE_ENV !== 'production' ? err.message : undefined
+    });
+  }
+});
+
+export default router;
