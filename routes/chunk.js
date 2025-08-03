@@ -20,30 +20,77 @@ const r2Client = process.env.R2_ACCESS_KEY_ID ? new S3Client({
 const gcsClient = (process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.GOOGLE_CREDENTIALS) ? 
   new Storage() : null;
 
-// Input validation middleware
-const validateTTSRequest = (req, res, next) => {
-  const { text, concurrency, voice, audioConfig } = req.body;
-  
-  if (!text || typeof text !== 'string') {
-    return res.status(400).json({ error: 'Valid text is required' });
+// Helper to parse potentially malformed JSON
+const safeJsonParse = (str) => {
+  try {
+    // Handle common JSON issues
+    const sanitized = String(str)
+      .trim()
+      .replace(/^[\s\uFEFF\xA0]+|[\s\uFEFF\xA0]+$/g, '')
+      .replace(/[\u2018\u2019]/g, "'")
+      .replace(/[\u201C\u201D]/g, '"')
+      .replace(/\r?\n|\t/g, ' ')
+      .replace(/,\s*([}\]])/g, '$1')
+      .replace(/([{,])(\s*)([A-Za-z0-9_\-]+?)\s*:/g, '$1"$3":');
+    
+    return JSON.parse(sanitized);
+  } catch (err) {
+    console.error('JSON Parse Error:', err.message);
+    throw new Error(`Invalid JSON: ${err.message}`);
   }
-  
-  if (concurrency && (concurrency < 1 || concurrency > 10)) {
-    return res.status(400).json({ error: 'Concurrency must be between 1 and 10' });
-  }
-  
-  if (voice && (!voice.languageCode || !voice.name)) {
-    return res.status(400).json({ error: 'Voice must include languageCode and name' });
-  }
-  
-  if (audioConfig && !audioConfig.audioEncoding) {
-    return res.status(400).json({ error: 'Audio config must include encoding type' });
-  }
-  
-  next();
 };
 
-// Improved text chunker
+// Input validation middleware
+const validateInput = (req, res, next) => {
+  try {
+    let input = {};
+    
+    // Handle both JSON body and query parameters
+    if (req.method === 'POST' && req.body) {
+      if (typeof req.body === 'object') {
+        input = req.body;
+      } else if (typeof req.body === 'string') {
+        input = safeJsonParse(req.body);
+      }
+    } else if (req.method === 'GET') {
+      input = {
+        text: req.query.text,
+        voice: req.query.voice ? safeJsonParse(req.query.voice) : undefined,
+        audioConfig: req.query.audioConfig ? safeJsonParse(req.query.audioConfig) : undefined,
+        concurrency: req.query.concurrency ? parseInt(req.query.concurrency) : 3,
+        R2_BUCKET: req.query.R2_BUCKET || process.env.R2_BUCKET,
+        R2_PREFIX: req.query.R2_PREFIX,
+        returnBase64: req.query.returnBase64 === 'true'
+      };
+    }
+
+    // Validate required fields
+    if (!input.text || typeof input.text !== 'string') {
+      return res.status(400).json({ error: 'Valid text is required' });
+    }
+
+    // Set defaults and validate
+    req.processedInput = {
+      text: input.text,
+      voice: input.voice || { languageCode: 'en-GB', name: 'en-GB-Wavenet-B' },
+      audioConfig: input.audioConfig || { audioEncoding: 'MP3', speakingRate: 1.0 },
+      concurrency: Math.min(Math.max(input.concurrency || 3, 1), 10),
+      R2_BUCKET: input.R2_BUCKET,
+      R2_PREFIX: input.R2_PREFIX,
+      returnBase64: input.returnBase64 || false
+    };
+
+    next();
+  } catch (err) {
+    console.error('Input Validation Error:', err);
+    res.status(400).json({ 
+      error: 'Invalid input',
+      details: process.env.NODE_ENV !== 'production' ? err.message : undefined
+    });
+  }
+};
+
+// Text processing functions
 const chunkText = (text, maxLength = 3000) => {
   const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
   const chunks = [];
@@ -62,7 +109,6 @@ const chunkText = (text, maxLength = 3000) => {
   return chunks;
 };
 
-// Enhanced sanitizer
 const sanitizeText = (text) => {
   if (!text) return '';
   return String(text)
@@ -73,20 +119,20 @@ const sanitizeText = (text) => {
     .trim();
 };
 
-// Upload helper functions
-const uploadToR2 = async (buffer, key) => {
+// Storage functions
+const uploadToR2 = async (buffer, key, bucket) => {
   try {
     const upload = new Upload({
       client: r2Client,
       params: {
-        Bucket: process.env.R2_BUCKET,
+        Bucket: bucket,
         Key: key,
         Body: buffer,
         ContentType: 'audio/mpeg'
       }
     });
     await upload.done();
-    return `${process.env.R2_PUBLIC_BASE_URL}/${key}`;
+    return `${process.env.R2_PUBLIC_BASE_URL || ''}/${key}`;
   } catch (err) {
     console.error('R2 Upload Error:', err);
     throw new Error('Failed to upload to R2 storage');
@@ -105,31 +151,21 @@ const uploadToGCS = async (buffer, key) => {
   }
 };
 
-// Request logging middleware
-router.use((req, res, next) => {
-  console.log(`TTS Request: ${req.method} ${req.path}`, {
-    ip: req.ip,
-    timestamp: new Date().toISOString(),
-    textLength: req.body?.text?.length || 0
-  });
-  next();
-});
-
-// Updated TTS endpoint
-router.post('/chunked', validateTTSRequest, async (req, res) => {
+// Main endpoint handler
+const processTTSRequest = async (req, res) => {
   try {
-    const { text, voice, audioConfig, concurrency = 3, R2_BUCKET, R2_PREFIX, returnBase64 } = req.body;
-    
+    const { text, voice, audioConfig, concurrency, R2_BUCKET, R2_PREFIX, returnBase64 } = req.processedInput;
     const cleanText = sanitizeText(text);
     const chunks = chunkText(cleanText);
-    
-    // Process chunks in parallel with limited concurrency
+
+    // Process chunks with controlled concurrency
+    const results = [];
     const processChunk = async (chunk, index) => {
       try {
         const [response] = await ttsClient.synthesizeSpeech({
           input: { text: chunk },
-          voice: voice || { languageCode: 'en-GB', name: 'en-GB-Wavenet-B' },
-          audioConfig: audioConfig || { audioEncoding: 'MP3', speakingRate: 1.0 }
+          voice,
+          audioConfig
         });
 
         if (returnBase64) {
@@ -146,9 +182,9 @@ router.post('/chunked', validateTTSRequest, async (req, res) => {
           `tts-${timestamp}-${index}.mp3`;
 
         let url;
-        if (r2Client && (R2_BUCKET || process.env.R2_BUCKET)) {
-          url = await uploadToR2(response.audioContent, key);
-        } else if (gcsClient) {
+        if (r2Client && R2_BUCKET) {
+          url = await uploadToR2(response.audioContent, key, R2_BUCKET);
+        } else if (gcsClient && process.env.GCS_BUCKET) {
           url = await uploadToGCS(response.audioContent, key);
         } else {
           return {
@@ -170,27 +206,32 @@ router.post('/chunked', validateTTSRequest, async (req, res) => {
       }
     };
 
-    // Process chunks with controlled concurrency
-    const chunkPromises = [];
-    const inProgress = new Set();
-    
+    // Process with concurrency control
+    const activePromises = new Set();
     for (let i = 0; i < chunks.length; i++) {
-      if (inProgress.size >= concurrency) {
-        await Promise.race(inProgress);
+      if (activePromises.size >= concurrency) {
+        await Promise.race(activePromises);
       }
-      
+
       const promise = processChunk(chunks[i], i)
-        .finally(() => inProgress.delete(promise));
-      
-      inProgress.add(promise);
-      chunkPromises.push(promise);
+        .then(result => {
+          results.push(result);
+          activePromises.delete(promise);
+        })
+        .catch(err => {
+          activePromises.delete(promise);
+          throw err;
+        });
+
+      activePromises.add(promise);
     }
 
-    const results = await Promise.all(chunkPromises);
+    // Wait for remaining promises
+    await Promise.all(activePromises);
 
     res.json({
       count: chunks.length,
-      chunks: results,
+      chunks: results.sort((a, b) => a.index - b.index),
       summaryBytesApprox: results.reduce((sum, r) => sum + (r.bytes || 0), 0)
     });
 
@@ -198,7 +239,7 @@ router.post('/chunked', validateTTSRequest, async (req, res) => {
     console.error('TTS Processing Error:', {
       message: err.message,
       stack: err.stack,
-      requestBody: req.body ? JSON.stringify(req.body).slice(0, 500) : null
+      input: req.processedInput
     });
     
     res.status(500).json({
@@ -206,6 +247,10 @@ router.post('/chunked', validateTTSRequest, async (req, res) => {
       details: process.env.NODE_ENV !== 'production' ? err.message : undefined
     });
   }
-});
+};
+
+// Register routes
+router.post('/chunked', validateInput, processTTSRequest);
+router.get('/chunked', validateInput, processTTSRequest);
 
 export default router;
