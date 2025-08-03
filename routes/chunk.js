@@ -5,46 +5,7 @@ import { S3Client } from '@aws-sdk/client-s3';
 
 const router = express.Router();
 
-// ======================
-// UK ENGLISH SSML FORMATTER
-// ======================
-const formatSSML = (text) => {
-  // UK-specific replacements
-  let processed = text
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    // Dates (DD/MM/YYYY)
-    .replace(/\b(\d{2})\/(\d{2})\/(\d{4})\b/g, 
-      '<say-as interpret-as="date" format="dmy">$1-$2-$3</say-as>')
-    // British currency
-    .replace(/\b£(\d+\.?\d*)\b/g, 
-      '<say-as interpret-as="currency" currency="GBP">$1</say-as>')
-    // Times (14:30)
-    .replace(/\b(\d{1,2}):(\d{2})\b/g,
-      '<say-as interpret-as="time" format="hms24">$1:$2</say-as>');
-
-  // UK tech terms
-  const UK_PRONUNCIATIONS = {
-    'API': 'A P I', 'JSON': 'Jay-son', 'HTTP': 'H T T P',
-    'AI': 'A I', 'SQL': 'Se-quel', 'CEO': 'C E O'
-  };
-
-  Object.entries(UK_PRONUNCIATIONS).forEach(([term, alias]) => {
-    processed = processed.replace(
-      new RegExp(`\\b${term}\\b`, 'gi'),
-      `<sub alias="${alias}">${term}</sub>`
-    );
-  });
-
-  // Natural pauses for British speech
-  return `<speak version="1.0" xml:lang="en-GB">
-    ${processed.replace(/([.,;])\s+/g, '$1<break time="300ms"/> ')
-               .replace(/([?!])\s+/g, '$1<break time="500ms"/> ')}
-  </speak>`;
-};
-
-// ======================
-// TTS CLIENT CONFIG
-// ======================
+// Initialize clients
 const ttsClient = process.env.GOOGLE_CREDENTIALS ? new TextToSpeechClient({
   credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
   projectId: process.env.GCP_PROJECT_ID
@@ -59,35 +20,49 @@ const r2Client = process.env.R2_ACCESS_KEY ? new S3Client({
   }
 }) : null;
 
-// ======================
-// QUERY STRING ENDPOINTS
-// ======================
+// Enhanced SSML Formatter for UK English
+const formatSSML = (text) => {
+  // British English specific replacements
+  let processed = text
+    .replace(/\b(\d{2})\/(\d{2})\/(\d{4})\b/g, 
+      '<say-as interpret-as="date" format="dmy">$1-$2-$3</say-as>') // UK date format
+    .replace(/\b£(\d+\.?\d*)\b/g, 
+      '<say-as interpret-as="currency" currency="GBP">$1</say-as>') // British pounds
+    .replace(/([.,;])\s+/g, '$1<break time="300ms"/> ') // Natural pauses
+    .replace(/([?!])\s+/g, '$1<break time="500ms"/> ');
+
+  return `<speak version="1.0" xml:lang="en-GB">${processed}</speak>`;
+};
+
+// GET Endpoint with Full Voice Control
 router.get('/speak', async (req, res) => {
   try {
-    // Required parameters
-    const { text, bucket } = req.query;
-    if (!text) return res.status(400).json({ error: "?text= required" });
+    const { 
+      text, 
+      voice = 'en-GB-Wavenet-B',
+      speed = '1.1',
+      pitch = '-2.0',      // Default slightly deeper pitch for UK English
+      volume = '3.0',     // Slight volume boost (in dB)
+      bucket,             // Optional R2 bucket
+      prefix = 'speech'   // File prefix
+    } = req.query;
 
-    // Optional parameters with defaults
-    const voice = req.query.voice || 'en-GB-Wavenet-B';
-    const speed = parseFloat(req.query.speed) || 1.1;
-    const prefix = req.query.prefix || 'speech';
+    if (!text) return res.status(400).json({ error: "?text= parameter required" });
 
-    // Generate SSML (auto-formats numbers, dates, etc.)
-    const ssml = formatSSML(text);
-
-    // Call Google TTS
+    // Generate speech with voice tuning
     const [response] = await ttsClient.synthesizeSpeech({
-      input: { ssml },
-      voice: { 
+      input: { ssml: formatSSML(text) },
+      voice: {
         languageCode: 'en-GB',
-        name: voice 
+        name: voice,
+        ssmlGender: voice.includes('Female') ? 'FEMALE' : 'MALE'
       },
       audioConfig: {
         audioEncoding: 'MP3',
-        speakingRate: speed,
-        pitch: -2.0,
-        volumeGainDb: 3.0
+        speakingRate: parseFloat(speed) || 1.1,  // Default slightly faster for UK English
+        pitch: parseFloat(pitch) || -2.0,       // -20.0 to 20.0
+        volumeGainDb: parseFloat(volume) || 3.0, // Volume boost in decibels
+        effectsProfileId: ['medium-bluetooth-speaker-class-device']
       }
     });
 
@@ -97,7 +72,8 @@ router.get('/speak', async (req, res) => {
         .replace(/[:.]/g, '-')
         .replace('T', '_');
       const key = `${prefix}_${timestamp}.mp3`;
-      const url = await new Upload({
+      
+      await new Upload({
         client: r2Client,
         params: {
           Bucket: bucket,
@@ -106,12 +82,10 @@ router.get('/speak', async (req, res) => {
           ContentType: 'audio/mpeg'
         }
       }).done();
-      
-      return res.json({ 
+
+      return res.json({
         url: `${process.env.R2_PUBLIC_BASE_URL}/${key}`,
-        textLength: text.length,
-        voice,
-        speed 
+        settings: { voice, speed, pitch, volume }
       });
     }
 
@@ -120,9 +94,10 @@ router.get('/speak', async (req, res) => {
     res.send(response.audioContent);
 
   } catch (err) {
-    console.error(`TTS Error: ${err.message}`);
+    console.error('TTS Error:', err);
     res.status(500).json({ 
       error: "Speech generation failed",
+      suggestion: "Check voice/pitch parameters are valid",
       details: process.env.NODE_ENV !== 'production' ? err.message : undefined
     });
   }
