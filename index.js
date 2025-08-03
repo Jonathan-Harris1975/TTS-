@@ -1,113 +1,54 @@
 import express from 'express';
+import cors from 'cors';
 import dotenv from 'dotenv';
+import chunkRouter from './routes/chunk.js';
 
-// 1. Initialize environment
+// Initialize environment
 dotenv.config();
 
-// 2. Create basic app
+// Create Express app
 const app = express();
 
-// 3. Add middleware
-app.use(express.json());
+// Middleware
+app.use(cors());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// 4. Add test endpoint
+// Test endpoint
 app.get('/test', (req, res) => {
-  console.log('✅ Test endpoint hit');
   res.json({
-    status: 'live',
-    env: {
-      nodeVersion: process.version,
-      time: new Date().toISOString()
-    }
-  });
-});
-
-// 5. Start server
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-  console.log('Environment variables:', {
-    PORT: process.env.PORT,
-    NODE_ENV: process.env.NODE_ENV
-  });
-});}));
-app.use(express.urlencoded({ 
-  extended: true, 
-  limit: '10mb'
-}));
-app.get('/health', async (req, res) => {
-  const checks = {
-    googleAuth: false,
-    r2Auth: false,
-    ttsReady: false
-  };
-
-  try {
-    // Test Google auth
-    if (ttsClient) {
-      await ttsClient.listVoices({});
-      checks.googleAuth = true;
-    }
-    
-    // Test R2 auth if configured
-    if (r2Client) {
-      // Simple R2 check would go here
-      checks.r2Auth = true;
-    }
-    
-    checks.ttsReady = checks.googleAuth;
-    
-    res.json({
-      status: checks.ttsReady ? 'healthy' : 'degraded',
-      checks,
-      timestamp: new Date().toISOString()
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: 'unhealthy',
-      error: err.message,
-      checks,
-      timestamp: new Date().toISOString()
-    });
-  }
-});
-// Routes
-app.get('/healthz', (req, res) => {
-  res.status(200).json({ 
     status: 'ok',
-    services: {
-      r2: !!process.env.R2_ACCESS_KEY,
-      google: !!process.env.GOOGLE_CREDENTIALS
-    },
+    message: 'Service is running',
     timestamp: new Date().toISOString()
   });
 });
 
+// Health check endpoint
+app.get('/healthz', (req, res) => {
+  res.status(200).json({ 
+    status: 'healthy',
+    services: {
+      r2: !!process.env.R2_ACCESS_KEY,
+      google: !!process.env.GOOGLE_CREDENTIALS
+    }
+  });
+});
+
+// API routes
 app.use('/tts', chunkRouter);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  const errorId = Date.now();
-  console.error(`[${errorId}]`, {
-    message: err.message,
-    stack: err.stack,
-    request: {
-      method: req.method,
-      url: req.url,
-      query: req.query,
-      body: Object.keys(req.body || {}).length ? '***' : 'empty'
-    }
-  });
-  
-  res.status(500).json({
+  console.error('Server Error:', err.message);
+  res.status(500).json({ 
     error: 'Internal Server Error',
-    errorId,
-    ...(process.env.NODE_ENV !== 'production' && { details: err.message })
+    message: process.env.NODE_ENV === 'development' ? err.message : undefined
   });
 });
 
+// Start server
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
-  console.log(`🚀 Server running on port ${port}`);
-  console.log(`🌎 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`Server running on port ${port}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 });
