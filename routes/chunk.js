@@ -5,71 +5,60 @@ import { S3Client } from '@aws-sdk/client-s3';
 
 const router = express.Router();
 
-// ======================
-// SSML FORMATTING ENGINE
-// ======================
+// ========================
+// UK ENGLISH SSML FORMATTER
+// ========================
 const formatSSML = (text) => {
-  if (!process.env.SSML_ENABLED || process.env.SSML_ENABLED === 'false') {
-    return `<speak>${text}</speak>`;
-  }
-
+  // UK-specific replacements
   let processed = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/\b(\d{2})\/(\d{2})\/(\d{4})\b/g, // Convert to UK date format
+      `<say-as interpret-as="date" format="dmy">$1-$2-$3</say-as>`)
+    .replace(/\b£(\d+\.?\d*)\b/g, 
+      `<say-as interpret-as="currency" currency="GBP">$1</say-as>`)
+    .replace(/\b(\d+)p\b/g, // British pence
+      `<say-as interpret-as="currency" currency="GBP">0.$1</say-as>`);
 
-  // Date formatting (ISO: 2025-08-03)
-  if (process.env.SSML_DATE_FORMAT) {
-    processed = processed.replace(
-      /\b(\d{4})-(\d{2})-(\d{2})\b/g,
-      `<say-as interpret-as="date" format="${process.env.SSML_DATE_FORMAT}">$1$2$3</say-as>`
-    );
-  }
+  // UK tech term pronunciations
+  const UK_TECH_TERMS = {
+    'API': 'A P I',
+    'JSON': 'Jay-son',
+    'HTTP': 'H T T P',
+    'AI': 'A I'
+  };
 
-  // Time formatting (14:30 or 2:30 PM)
-  if (process.env.SSML_TIME_FORMAT) {
-    processed = processed.replace(
-      /\b(\d{1,2}):(\d{2})(?::(\d{2}))?\s?(AM|PM)?\b/gi,
-      (match, h, m, s, period) => {
-        const timeStr = s ? `${h}:${m}:${s}` : `${h}:${m}`;
-        return `<say-as interpret-as="time" format="${process.env.SSML_TIME_FORMAT}">${timeStr}${period || ''}</say-as>`;
-      }
-    );
-  }
+  processed = processed.replace(
+    /\b(API|JSON|HTTP|AI)\b/gi, 
+    match => `<sub alias="${UK_TECH_TERMS[match.toUpperCase()]}">${match}</sub>`
+  );
 
-  // Currency formatting ($19.99 or 42 EUR)
-  if (process.env.SSML_CURRENCIES === 'true') {
-    processed = processed
-      .replace(/\$(\d+\.?\d*)\b/g, '<say-as interpret-as="currency" currency="USD">$1</say-as>')
-      .replace(/\b(\d+\.?\d*)\s?(USD|EUR|GBP|JPY)\b/gi, '<say-as interpret-as="currency" currency="$2">$1</say-as>');
-  }
+  // UK-style pauses (longer after commas)
+  processed = processed
+    .replace(/([,;])\s+/g, '<break time="400ms"/>$1 ')
+    .replace(/([.!?])\s+/g, '<break time="600ms"/>$1 ');
 
-  // Measurements (5kg, 10 miles)
-  if (process.env.SSML_MEASUREMENTS === 'true') {
-    processed = processed.replace(
-      /\b(\d+\.?\d*)\s?(kg|lb|cm|in|km|mi|m|ft)\b/gi,
-      '<say-as interpret-as="unit">$1 $2</say-as>'
-    );
-  }
-
-  // Acronyms (NASA, FAQ)
-  if (process.env.SSML_ACRONYMS === 'true') {
-    processed = processed.replace(
-      /\b([A-Z]{2,})\b/g,
-      (match) => `<sub alias="${match.split('').join(' ')}">${match}</sub>`
-    );
-  }
-
-  // Add pauses after punctuation
-  const breakTime = process.env.SSML_BREAK_MS ? `${process.env.SSML_BREAK_MS}ms` : '300ms';
-  processed = processed.replace(/([.!?;])\s+/g, `$1<break time="${breakTime}"/> `);
-
-  return `<speak>${processed}</speak>`;
+  return `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-GB">${processed}</speak>`;
 };
 
-// ======================
+// ========================
+// UK VOICE CONFIGURATION
+// ========================
+const getVoiceSettings = () => ({
+  languageCode: 'en-GB',
+  name: process.env.DEFAULT_VOICE || 'en-GB-Wavenet-B',
+  ssmlGender: 'MALE'
+});
+
+const getAudioConfig = () => ({
+  audioEncoding: 'MP3',
+  speakingRate: parseFloat(process.env.DEFAULT_SPEAKING_RATE) || 1.1,
+  pitch: parseFloat(process.env.DEFAULT_PITCH) || -2.0,
+  volumeGainDb: 3.0,
+  effectsProfileId: ['medium-bluetooth-speaker-class-device']
+});
+
+// ========================
 // CORE FUNCTIONALITY
-// ======================
+// ========================
 let ttsClient;
 if (process.env.GOOGLE_CREDENTIALS) {
   try {
@@ -78,98 +67,35 @@ if (process.env.GOOGLE_CREDENTIALS) {
       projectId: process.env.GCP_PROJECT_ID
     });
   } catch (err) {
-    console.error('❌ Google TTS init failed:', err.message);
+    console.error('❌ TTS Init Error:', err.message);
   }
 }
 
-const r2Client = process.env.R2_ACCESS_KEY ? new S3Client({
-  region: 'auto',
-  endpoint: process.env.R2_ENDPOINT,
-  credentials: {
-    accessKeyId: process.env.R2_ACCESS_KEY,
-    secretAccessKey: process.env.R2_SECRET_KEY
-  }
-}) : null;
-
-const sanitizeText = (text) => String(text).replace(/[^\w\s.,!?;:'"\-<>]/g, '').trim();
-
-const uploadToR2 = async (buffer, key, bucket) => {
-  const upload = new Upload({
-    client: r2Client,
-    params: {
-      Bucket: bucket,
-      Key: key,
-      Body: buffer,
-      ContentType: 'audio/mpeg'
-    }
-  });
-  await upload.done();
-  return `${process.env.R2_PUBLIC_BASE_URL.replace(/\/+$/, '')}/${key}`;
-};
-
-// ======================
+// ========================
 // API ENDPOINTS
-// ======================
-router.get('/chunked/fast', async (req, res) => {
+// ========================
+router.post('/tts', async (req, res) => {
   try {
-    // Validate input
-    if (!req.query.text) {
-      return res.status(400).json({
-        error: "Missing text",
-        example: "?text=Hello+world&voice=en-US-Wavenet-A"
-      });
-    }
+    const { text, voiceConfig, audioConfig } = req.body;
 
-    // Process text
-    const maxLength = Math.min(
-      parseInt(req.query.maxLength) || 2000,
-      parseInt(process.env.MAX_TEXT_LENGTH) || 5000
-    );
-    const cleanText = sanitizeText(req.query.text).slice(0, maxLength);
-    const isTruncated = req.query.text.length > maxLength;
-
-    // Generate speech
     const [response] = await ttsClient.synthesizeSpeech({
-      input: { ssml: formatSSML(cleanText) },
-      voice: {
-        languageCode: req.query.languageCode || 'en-GB',
-        name: req.query.name || 'en-GB-Wavenet-B'
-      },
-      audioConfig: {
-        audioEncoding: req.query.audioEncoding || 'MP3',
-        speakingRate: req.query.speakingRate ? parseFloat(req.query.speakingRate) : 1.0
-      }
+      input: { ssml: formatSSML(text) },
+      voice: voiceConfig || getVoiceSettings(),
+      audioConfig: audioConfig || getAudioConfig()
     });
 
-    // Handle output
-    if (r2Client && (req.query.R2_BUCKET || process.env.R2_BUCKET)) {
-      const bucket = req.query.R2_BUCKET || process.env.R2_BUCKET;
-      const prefix = req.query.R2_PREFIX || new Date().toISOString().split('T')[0];
-      const key = `${prefix}-${Date.now()}.mp3`;
-      
-      const url = await uploadToR2(response.audioContent, key, bucket);
-      return res.json({
-        url,
-        textLength: cleanText.length,
-        isTruncated,
-        ssml: formatSSML(cleanText)
-      });
-    }
-
     res.json({
-      base64: response.audioContent.toString('base64'),
-      textLength: cleanText.length,
-      isTruncated
+      audioContent: response.audioContent.toString('base64'),
+      ssmlUsed: formatSSML(text),
+      voiceSettings: getVoiceSettings()
     });
 
   } catch (err) {
-    console.error(`TTS Error: ${err.message}`);
+    console.error('UK TTS Error:', err);
     res.status(500).json({
-      error: "Processing failed",
-      details: process.env.NODE_ENV !== 'production' ? {
-        message: err.message,
-        stack: err.stack
-      } : undefined
+      error: "Speech generation failed",
+      suggestion: "Try reducing text length or adjusting voice settings",
+      details: process.env.NODE_ENV !== 'production' ? err.message : undefined
     });
   }
 });
