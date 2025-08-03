@@ -1,7 +1,6 @@
-// routes/chunk.js — JSON + pure text endpoints with strict final parser for TTS
 import express from "express";
-import qs from "qs";
 import { S3Client } from "@aws-sdk/client-s3";
+import qs from "qs";
 
 const router = express.Router();
 
@@ -13,81 +12,85 @@ const stripLabelPrefix = (s) => String(s || "").replace(/^\s*(intro|main|outro)\
 const stripSpeak = (s) =>
   String(s ?? "").replace(/^\s*<speak[^>]*>/i, "").replace(/<\/speak>\s*$/i, "");
 
-// ... (keep all other existing helper functions)
+// SSML -> plain (fix "A I" → "AI", drop tags)
+const ssmlToPlain = (s) => {
+  let t = String(s ?? "");
+  t = stripSpeak(t);
+  t = t.replace(/<\s*say-as\b[^>]*>([\s\S]*?)<\/\s*say-as\s*>/gi, (_, inner) =>
+    String(inner).replace(/\s+/g, "")
+  );
+  t = t.replace(/<\s*break\b[^>]*>/gi, " ");
+  t = t.replace(/<[^>]+>/g, "");
+  return t.replace(/\s+/g, " ").trim();
+};
 
-/* ---------------------------- core endpoint ---------------------------- */
-router.post("/chunked", (req, res) => {
-  try {
-    // Get data from either JSON body or query string
-    let payload = {};
-    
-    if (req.method === "POST" && req.body) {
-      // If Content-Type is application/json, use the body directly
-      if (req.headers["content-type"] === "application/json") {
-        payload = req.body;
-      } 
-      // If form data, parse it
-      else if (req.headers["content-type"]?.startsWith("application/x-www-form-urlencoded")) {
-        payload = qs.parse(req.body);
-      }
-      // For other cases, try to parse as JSON or use as-is
-      else if (typeof req.body === "string") {
-        try {
-          payload = JSON.parse(req.body);
-        } catch {
-          payload = qs.parse(req.body);
-        }
-      } else {
-        payload = req.body;
-      }
-    }
-    
-    // Also include query parameters (lower priority than body)
-    payload = { ...req.query, ...payload };
+const unescapeCommon = (s) =>
+  String(s ?? "")
+    .replace(/\\"/g, '"')
+    .replace(/\\n/g, " ")
+    .replace(/\\t/g, " ")
+    .replace(/\\r/g, " ");
 
-    // Extract parameters with fallbacks
-    const text = payload.text || "";
-    const voice = typeof payload.voice === "string" ? tryParseJson(payload.voice) : payload.voice || {
-      languageCode: payload.languageCode || "en-GB",
-      name: payload.voiceName || payload.name || "en-GB-Wavenet-B"
-    };
-    
-    const audioConfig = typeof payload.audioConfig === "string" ? tryParseJson(payload.audioConfig) : payload.audioConfig || {
-      audioEncoding: payload.audioEncoding || "MP3",
-      speakingRate: parseFloat(payload.speakingRate) || 1.0
-    };
-    
-    const concurrency = parseInt(payload.concurrency) || 3;
-    const R2_BUCKET = payload.R2_BUCKET || process.env.R2_BUCKET;
-    const R2_PREFIX = payload.R2_PREFIX || "raw-" + new Date().toISOString().split("T")[0];
-    const returnBase64 = payload.returnBase64 === "true" || payload.returnBase64 === true;
+function normalizeUnicodePunctuation(s) {
+  return String(s ?? "")
+    .replace(/\u00A0/g, " ")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/[\u2013\u2014\u2212]/g, "-")
+    .replace(/\u2026/g, "...")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/([(\[])\s+/g, "$1")
+    .replace(/\s+([)\]])/g, "$1");
+}
 
-    // Validate required fields
-    if (!text) {
-      return res.status(400).json({ error: "Missing required field: text" });
-    }
+const toASCII = (s) =>
+  String(s ?? "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x00-\x7F]/g, "");
 
-    // Process the text into chunks (using your existing logic)
-    const chunks = splitIntoChunks(text); // You'll need to implement this or use existing logic
-    
-    // Generate response
-    const response = {
-      count: chunks.length,
-      chunks: chunks.map((chunk, index) => ({
-        index,
-        bytesApprox: chunk.length * 2, // Example approximation
-        url: returnBase64 ? null : `https://example.com/${R2_PREFIX}-${index.toString().padStart(3, "0")}.mp3`,
-        base64: returnBase64 ? Buffer.from(chunk).toString("base64") : null
-      })),
-      summaryBytesApprox: chunks.reduce((sum, chunk) => sum + chunk.length * 2, 0)
-    };
+function strictClean(text, { ascii = false, join = "space" } = {}) {
+  let t = unescapeCommon(text);
+  t = normalizeUnicodePunctuation(t);
+  t = t.replace(/\bA\s+I\b/g, "AI");
+  t = t.replace(/\s+/g, " ").trim();
+  if (ascii) t = toASCII(t);
+  return t;
+}
 
-    res.json(response);
-  } catch (e) {
-    res.status(500).json({ error: e?.message || String(e) });
-  }
-});
+function normalizeSpeak(input) {
+  if (input == null) return "";
+  return wrapSpeak(stripLabelPrefix(input));
+}
 
-// ... (keep the rest of the existing file)
+function normalizeMain(input) {
+  if (input == null) return { chunks: [] };
+  if (typeof input === "string") return { chunks: [normalizeSpeak(input)] };
+  if (Array.isArray(input)) return { chunks: input.map(normalizeSpeak) };
+  if (typeof input === "object" && Array.isArray(input.chunks)) return { chunks: input.chunks.map(normalizeSpeak) };
+  if (typeof input === "object" && typeof input.text === "string") return { chunks: [normalizeSpeak(input.text)] };
+  return { chunks: [] };
+}
 
-export default router;
+const tryParseJson = (s) => { try { return JSON.parse(s); } catch { return null; } };
+
+/* ---------------------------- core composition --------------------------- */
+function buildOutputs(body = {}, q = {}) {
+  const name = (body.name || q.name || "en-GB-Wavenet-B").toString();
+  const r2Prefix = (body.r2Prefix || q.r2Prefix || "podcast").toString();
+
+  let intro = "";
+  if (body.intro) intro = normalizeSpeak(body.intro);
+  else if (body.textIntro) intro = normalizeSpeak(body.textIntro);
+  else if (q.intro) intro = normalizeSpeak(q.intro);
+
+  let outro = "";
+  if (body.outro) outro = normalizeSpeak(body.outro);
+  else if (body.textOutro) outro = normalizeSpeak(body.textOutro);
+  else if (q.outro) outro = normalizeSpeak(q.outro);
+
+  let mainNorm = normalizeMain(body.main ?? body.textMain ?? body.text);
+  if (!mainNorm.chunks.length) {
+    const chunkKeys = Object.keys(q)
+      .
