@@ -3,26 +3,14 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import chunkRouter from './routes/chunk.js';
 
-// Load and verify environment
+// Initialize environment
 dotenv.config();
-if (!process.env.PORT) {
-  console.warn('PORT not set, defaulting to 3000');
-}
 
 const app = express();
 
-// Enhanced middleware
+// Middleware
 app.use(cors());
-app.use(express.json({ 
-  limit: '10mb',
-  verify: (req, res, buf) => {
-    try {
-      JSON.parse(buf.toString());
-    } catch (e) {
-      throw new Error('Invalid JSON');
-    }
-  }
-}));
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Routes
@@ -35,19 +23,27 @@ app.get('/healthz', (req, res) => {
 
 app.use('/tts', chunkRouter);
 
-// Error handling
+// Error handling middleware
 app.use((err, req, res, next) => {
-  const errorId = Date.now();
-  console.error(`[${errorId}]`, err);
+  console.error('Server Error:', {
+    message: err.message,
+    stack: err.stack,
+    request: {
+      method: req.method,
+      url: req.url,
+      params: req.params,
+      query: req.query
+    }
+  });
   
-  res.status(err.status || 500).json({
+  res.status(500).json({
     error: 'Internal Server Error',
-    errorId,
-    details: process.env.NODE_ENV === 'development' ? err.message : undefined
+    requestId: req.id
   });
 });
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
-  console.log(`Environment: ${process.env.NODE_ENV || '
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+});
