@@ -3,7 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
 import winston from 'winston';
-import chunkRouter from './routes/chunk.js'; // Fixed import path
+import chunkRouter from './routes/Chunk.js'; // Fixed import path
 
 // Initialize environment
 dotenv.config();
@@ -17,10 +17,13 @@ const logger = winston.createLogger({
   ),
   transports: [
     new winston.transports.Console(),
-    new winston.transports.File({ 
-      filename: 'logs/combined.log',
-      level: 'info'
-    })
+    // Only create file transport if logs directory exists
+    ...(process.env.NODE_ENV !== 'production' ? [
+      new winston.transports.File({ 
+        filename: 'logs/combined.log',
+        level: 'info'
+      })
+    ] : [])
   ]
 });
 
