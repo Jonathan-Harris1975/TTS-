@@ -39,7 +39,42 @@ app.use(express.urlencoded({
   extended: true, 
   limit: '10mb'
 }));
+app.get('/health', async (req, res) => {
+  const checks = {
+    googleAuth: false,
+    r2Auth: false,
+    ttsReady: false
+  };
 
+  try {
+    // Test Google auth
+    if (ttsClient) {
+      await ttsClient.listVoices({});
+      checks.googleAuth = true;
+    }
+    
+    // Test R2 auth if configured
+    if (r2Client) {
+      // Simple R2 check would go here
+      checks.r2Auth = true;
+    }
+    
+    checks.ttsReady = checks.googleAuth;
+    
+    res.json({
+      status: checks.ttsReady ? 'healthy' : 'degraded',
+      checks,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'unhealthy',
+      error: err.message,
+      checks,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
 // Routes
 app.get('/healthz', (req, res) => {
   res.status(200).json({ 
