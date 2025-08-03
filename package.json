@@ -1,11 +1,11 @@
 {
-  "name": "tts-chunker-service",
+   "name": "tts-chunker-service",
   "version": "1.1.0",
   "type": "module",
-  "main": "src/index.js",
+  "main": "index.js",  // Changed from src/index.js
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "nodemon src/index.js",
+    "start": "node index.js",  // Changed from src/index.js
+    "dev": "nodemon index.js", // Changed from src/index.js
     "build": "npm install"
   },
   "dependencies": {
