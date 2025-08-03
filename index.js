@@ -1,40 +1,36 @@
 import express from 'express';
-import cors from 'cors';
 import dotenv from 'dotenv';
-import chunkRouter from './routes/chunk.js';
 
-// Initialize environment with validation
+// 1. Initialize environment
 dotenv.config();
 
-const requiredEnvVars = [
-  'R2_ACCESS_KEY',
-  'R2_SECRET_KEY',
-  'R2_ENDPOINT',
-  'GOOGLE_CREDENTIALS'
-];
-
-const missingVars = requiredEnvVars.filter(v => !process.env[v]);
-if (missingVars.length > 0) {
-  console.error('❌ Missing required environment variables:', missingVars);
-  process.exit(1);
-}
-
-console.log('✅ Environment variables verified');
-
+// 2. Create basic app
 const app = express();
 
-// Enhanced middleware
-app.use(cors());
-app.use(express.json({ 
-  limit: '10mb',
-  verify: (req, res, buf) => {
-    try {
-      if (buf.length) JSON.parse(buf.toString());
-    } catch (e) {
-      throw new Error('Invalid JSON body');
+// 3. Add middleware
+app.use(express.json());
+
+// 4. Add test endpoint
+app.get('/test', (req, res) => {
+  console.log('✅ Test endpoint hit');
+  res.json({
+    status: 'live',
+    env: {
+      nodeVersion: process.version,
+      time: new Date().toISOString()
     }
-  }
-}));
+  });
+});
+
+// 5. Start server
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+  console.log('Environment variables:', {
+    PORT: process.env.PORT,
+    NODE_ENV: process.env.NODE_ENV
+  });
+});}));
 app.use(express.urlencoded({ 
   extended: true, 
   limit: '10mb'
