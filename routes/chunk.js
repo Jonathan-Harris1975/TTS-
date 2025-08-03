@@ -228,12 +228,6 @@ function getR2Client() {
   });
 }
 
-export default router;    R2_SECRET_KEY,        // your existing
-
-
-
-
-// ---- Helpers ----
 
 
 
@@ -251,25 +245,5 @@ export default router;    R2_SECRET_KEY,        // your existing
 
 
 
-// R2 config
-const {
-  R2_ACCESS_KEY_ID,
-  R2_ACCESS_KEY,
-  R2_SECRET_ACCESS_KEY,
-  R2_SECRET_KEY,
-  R2_ENDPOINT
-} = process.env;
-
-function getR2Client() {
-  const accessKeyId = R2_ACCESS_KEY_ID || R2_ACCESS_KEY;
-  const secretAccessKey = R2_SECRET_ACCESS_KEY || R2_SECRET_KEY;
-  if (!accessKeyId || !secretAccessKey || !R2_ENDPOINT) return null;
-
-  return new S3Client({
-    region: "auto",
-    endpoint: R2_ENDPOINT,
-    credentials: { accessKeyId, secretAccessKey },
-  });
-}
 
 export default router;
