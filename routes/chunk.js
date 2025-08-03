@@ -75,22 +75,23 @@ router.post('/chunked', async (req, res) => {
     console.log(`ℹ️ [${requestId}] Processing text (first 50 chars):`, 
       text.length > 50 ? text.slice(0, 50) + '...' : text);
 
-    // Process with timeout
-    const response = await Promise.race([
-      ttsClient.synthesizeSpeech({
-        input: { text },
-        voice: voice || {
-          languageCode: "en-GB",
-          name: "en-GB-Wavenet-B"
-        },
-        audioConfig: audioConfig || {
-          audioEncoding: "MP3",
-          speakingRate: 1.0
-        }
-      }),
-      new Promise((_, reject) => 
-        setTimeout(() => reject(new Error("TTS timeout after 10s")), 10000)
-    ]);
+    // Process with timeout - FIXED SYNTAX HERE
+    const ttsPromise = ttsClient.synthesizeSpeech({
+      input: { text },
+      voice: voice || {
+        languageCode: "en-GB",
+        name: "en-GB-Wavenet-B"
+      },
+      audioConfig: audioConfig || {
+        audioEncoding: "MP3",
+        speakingRate: 1.0
+      }
+    });
+
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error("TTS timeout after 10s")), 10000);
+
+    const response = await Promise.race([ttsPromise, timeoutPromise]);
 
     console.log(`✅ [${requestId}] TTS successful`);
     res.json({
