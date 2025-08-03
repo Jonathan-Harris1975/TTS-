@@ -56,43 +56,9 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start server
-const serverPort = process.env.PORT || 3000; // Changed variable name to avoid conflict
+// Start server - USING serverPort INSTEAD OF port TO AVOID DUPLICATION
+const serverPort = process.env.PORT || 3000;
 app.listen(serverPort, () => {
   console.log(`🚀 Server running on port ${serverPort}`);
   console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
-});// API routes
-app.use('/tts', chunkRouter);
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error('Server Error:', err.message);
-  res.status(500).json({ 
-    error: 'Internal Server Error',
-    message: process.env.NODE_ENV === 'development' ? err.message : undefined
-  });
-});
-
-// Start server
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-});// API routes
-app.use('/tts', chunkRouter);
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error('Server Error:', err.message);
-  res.status(500).json({ 
-    error: 'Internal Server Error',
-    message: process.env.NODE_ENV === 'development' ? err.message : undefined
-  });
-});
-
-// Start server
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 });
