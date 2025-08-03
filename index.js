@@ -23,15 +23,7 @@ const logger = createLogger({
   ]
 });
 
-// Create Express app instance
 const app = express();
-
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again later'
-});
 
 // Enhanced CORS configuration
 const corsOptions = {
@@ -40,57 +32,27 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization'],
   maxAge: 86400
 };
-
-// Middleware setup
 app.use(cors(corsOptions));
-app.use(limiter);
-app.use(express.text({ type: 'application/json', limit: '10mb' }));
 
-// Improved JSON parsing middleware
-app.use((req, res, next) => {
-  if (req.is('application/json')) {
-    try {
-      // Enhanced JSON sanitization
-      const sanitized = req.body
-        .replace(/[\u2018\u2019]/g, "'")
-        .replace(/[\u201C\u201D]/g, '"')
-        .replace(/(['"])/g, '\\$1')
-        .replace(/\r?\n|\t/g, ' ')
-        .replace(/,\s*([}\]])/g, '$1')
-        .replace(/([{,])(\s*)([A-Za-z0-9_\-]+?)\s*:/g, '$1"$3":');
-
-      req.body = JSON.parse(sanitized);
-      logger.debug('Successfully parsed JSON body');
-    } catch (err) {
-      const errorPos = parseInt(err.message.match(/position (\d+)/)?.[1]) || 0;
-      const sample = req.body.slice(Math.max(0, errorPos-20), errorPos+20);
-      
-      logger.error('JSON Parse Error', {
-        position: errorPos,
-        problemArea: sample,
-        error: err.message,
-        url: req.originalUrl,
-        ip: req.ip
-      });
-
-      return res.status(400).json({
-        error: 'Invalid JSON format',
-        position: errorPos,
-        problemArea: sample,
-        solution: 'Check for unclosed quotes, brackets, or trailing commas',
-        documentation: 'https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON'
-      });
-    }
-  }
-  next();
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: 'Too many requests from this IP, please try again later'
 });
+app.use(limiter);
+
+// Middleware to handle both JSON and URL-encoded data
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Request logging middleware
 app.use((req, res, next) => {
   logger.info(`${req.method} ${req.originalUrl}`, {
     ip: req.ip,
     userAgent: req.get('User-Agent'),
-    contentType: req.get('Content-Type')
+    contentType: req.get('Content-Type'),
+    body: req.method === 'POST' ? req.body : req.query
   });
   next();
 });
@@ -104,7 +66,6 @@ app.get('/health', (req, res) => {
     memory: process.memoryUsage(),
     env: process.env.NODE_ENV
   };
-  logger.debug('Health check performed', healthcheck);
   res.json(healthcheck);
 });
 
@@ -127,7 +88,8 @@ app.use((err, req, res, next) => {
     stack: err.stack,
     url: req.originalUrl,
     method: req.method,
-    body: req.body ? JSON.stringify(req.body).slice(0, 500) : null
+    body: req.body,
+    query: req.query
   });
   
   const response = {
