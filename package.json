@@ -1,15 +1,14 @@
 {
-   "name": "tts-chunker-service",
+  "name": "tts-chunker-service",
   "version": "1.1.0",
   "type": "module",
-  "main": "index.js", 
+  "main": "index.js",
   "scripts": {
-    "start": "node index.js", 
-    "dev": "nodemon index.js",
+    "start": "node ./index.js",
+    "dev": "nodemon ./index.js",
     "build": "npm install"
   },
   "dependencies": {
-    
     "@aws-sdk/client-s3": "^3.669.0",
     "@aws-sdk/lib-storage": "^3.669.0",
     "@google-cloud/text-to-speech": "^5.8.0",
