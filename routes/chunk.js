@@ -66,7 +66,9 @@ const uploadToR2 = async (buffer, key, bucket) => {
       }
     });
     await upload.done();
-    return `${process.env.R2_PUBLIC_BASE_URL}/${key}`;
+    // Clean the base URL and ensure no double slashes
+    const cleanBaseUrl = process.env.R2_PUBLIC_BASE_URL.replace(/\/+$/, '');
+    return `${cleanBaseUrl}/${key}`;
   } catch (err) {
     console.error('R2 Upload Error:', err);
     throw new Error('Failed to upload to R2 storage');
@@ -106,8 +108,13 @@ router.get('/chunked/fast', async (req, res) => {
     });
 
     if (r2Client && input.R2_BUCKET) {
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const key = `${input.R2_PREFIX}-${timestamp}.mp3`;
+      const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+      const timePart = new Date().toISOString()
+        .replace(/[:.]/g, '-')
+        .split('T')[1]
+        .split('.')[0]; // HH-MM-SS format
+      const key = `${input.R2_PREFIX || today}-${timePart}.mp3`;
+      
       const url = await uploadToR2(response.audioContent, key, input.R2_BUCKET);
       return res.json({
         status: 'success',
@@ -148,6 +155,7 @@ router.post('/chunked', async (req, res) => {
     const cleanText = sanitizeText(text);
     const chunks = chunkText(cleanText);
     const bucket = R2_BUCKET || process.env.R2_BUCKET;
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
 
     const results = await Promise.all(chunks.map(async (chunk, index) => {
       const [response] = await ttsClient.synthesizeSpeech({
@@ -163,7 +171,7 @@ router.post('/chunked', async (req, res) => {
       });
 
       if (r2Client && bucket) {
-        const key = `${R2_PREFIX || 'tts'}-${index.toString().padStart(3, '0')}.mp3`;
+        const key = `${R2_PREFIX || today}-${index.toString().padStart(3, '0')}.mp3`;
         const url = await uploadToR2(response.audioContent, key, bucket);
         return {
           index,
