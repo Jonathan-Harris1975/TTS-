@@ -14,11 +14,10 @@
     "express": "^4.19.2",
     "dotenv": "^16.4.5",
     "cors": "^2.8.5",
-    "p-limit": "^5.0.0",
-    "lodash": "^4.17.21",
     "@google-cloud/text-to-speech": "^5.8.0",
     "@google-cloud/storage": "^7.14.0",
     "@aws-sdk/client-s3": "^3.669.0",
+    "@aws-sdk/lib-storage": "^3.669.0",
     "qs": "^6.12.1"
   }
 }
