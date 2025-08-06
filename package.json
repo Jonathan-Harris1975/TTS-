@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "build": "npm install"
+    "build": "npm install",
+   "keepalive": "node Keepalive.js"
+    }
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.669.0",
