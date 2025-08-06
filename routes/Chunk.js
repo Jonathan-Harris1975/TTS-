@@ -25,6 +25,7 @@ async function handleTTS(text) {
   return await saveToR2(filename, response.audioContent);
 }
 
+// POST endpoint for chunked TTS
 router.post('/chunked', async (req, res) => {
   try {
     if (!req.body.text) {
@@ -34,34 +35,15 @@ router.post('/chunked', async (req, res) => {
     res.json({ success: true, r2_url: publicUrl });
   } catch (err) {
     console.error('[ERROR]', err);
-    res.status(500).json({ error: 'Processing failed', message: err.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-router.get('/chunked/fast', async (req, res) => {
-  try {
-    if (!req.query.text) {
-      return res.status(400).json({ error: 'text query parameter is required' });
-    }
-    const publicUrl = await handleTTS(req.query.text);
-    res.json({ success: true, r2_url: publicUrl });
-  } catch (err) {
-    console.error('[ERROR]', err);
-    res.status(500).json({ error: 'Processing failed', message: err.message });
-  }
-});
-
-export default router;      status: 'success',
-      message: 'GET endpoint is working',
-      text: text.slice(0, 100)
-    });
-    
-  } catch (err) {
-    res.status(500).json({ 
-      error: "Processing failed",
-      message: err.message
-    });
-  }
+// Simple GET endpoint to verify service is running
+router.get('/chunked', (req, res) => {
+  res.json({
+    message: 'GET endpoint is working'
+  });
 });
 
 export default router;
