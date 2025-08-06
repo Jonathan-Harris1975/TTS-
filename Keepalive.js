@@ -1,21 +1,10 @@
-const axios = require('axios');
-require('dotenv').config();
+import axios from 'axios';
 
-const BASE_URL = process.env.RENDER_EXTERNAL_URL || 'http://localhost:3000';
-
-async function pingServer() {
+setInterval(async () => {
   try {
-    await axios.get(`${BASE_URL}/health`);
-    console.log('Keepalive ping successful');
+    await axios.get(process.env.KEEPALIVE_URL);
+    console.log(`[Keepalive] Pinged ${process.env.KEEPALIVE_URL}`);
   } catch (err) {
-    console.error('Keepalive ping failed:', err.message);
+    console.error('[Keepalive] Ping failed', err.message);
   }
-}
-
-// Ping every 5 minutes (300000ms)
-setInterval(pingServer, 300000);
-
-// Initial ping
-pingServer();
-
-console.log('Keepalive service started');
+}, 5 * 60 * 1000); // every 5 minutes
