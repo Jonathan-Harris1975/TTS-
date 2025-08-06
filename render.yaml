@@ -1,18 +1,25 @@
-services:
-  - type: web
-    name: tts-chunker-service
-    env: node
-    plan: free
-    buildCommand: npm install
-    startCommand: npm start
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: LOG_LEVEL
-        value: info
-      - key: PORT
-        fromService:
-          type: web
-          name: tts-chunker-service
-          property: port
+image: node:20
 
+stages:
+  - build
+  - deploy
+
+variables:
+  NODE_ENV: production
+
+cache:
+  paths:
+    - node_modules/
+
+build:
+  stage: build
+  script:
+    - npm ci
+
+deploy:
+  stage: deploy
+  script:
+    - npm ci --omit=dev
+    - npm start
+  only:
+    - main
